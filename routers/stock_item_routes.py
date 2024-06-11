@@ -1,4 +1,6 @@
 from fastapi import APIRouter, status, Body, HTTPException
+from pymongo.response import Response
+
 from models import StockItem, StockItemCollection, UpdateStockItem
 from pymongo import ReturnDocument
 from bson import ObjectId
@@ -145,3 +147,17 @@ async def get_stock_items_with_damages(stock_id: str):
     ]
 
     return await stock_item_collection.aggregate(pipeline).to_list(None)
+
+@router.delete(
+    "/{id}",
+    response_description="Delete a stock item",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_stock_item(id: str):
+    # Check if the stock item exists
+    existing_stock_item = await stock_item_collection.find_one({"_id": ObjectId(id)})
+    if existing_stock_item is None:
+        raise HTTPException(status_code=404, detail=f"Stock item {id} not found")
+
+    # Delete the stock item
+    await stock_item_collection.delete_one({"_id": ObjectId(id)})

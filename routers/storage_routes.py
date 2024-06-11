@@ -1,7 +1,9 @@
+from typing import List
+
 from fastapi import APIRouter, HTTPException, status, Body
 from bson import ObjectId
 from pymongo import ReturnDocument
-from models import Storage, UpdateStorage, StorageCollection
+from models import Storage, UpdateStorage, StorageCollection, StorageSummary
 import motor.motor_asyncio
 
 router = APIRouter()
@@ -62,3 +64,57 @@ async def update_storage(id: str, storage: UpdateStorage = Body(...)):
         return existing_storage
 
     raise HTTPException(status_code=404, detail=f"Storage {id} not found")
+
+@router.get("/summary", response_model=List[StorageSummary])
+async def get_storage_summary():
+    try:
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "stock_items",
+                    "localField": "_id",
+                    "foreignField": "storage_id",
+                    "as": "stock_items"
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "reservations",
+                    "localField": "stock_items._id",
+                    "foreignField": "stock_item_id",
+                    "as": "reservations"
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "damages",
+                    "localField": "stock_items._id",
+                    "foreignField": "stock_item_id",
+                    "as": "damages"
+                }
+            },
+            {
+                "$project": {
+                    "_id": 1,
+                    "total_reservations": {"$size": "$reservations"},
+                    "total_stock_items": {"$size": "$stock_items"},
+                    "total_damages": {"$size": "$damages"}
+                }
+            }
+        ]
+
+        cursor = storage_collection.aggregate(pipeline)
+        storage_summaries = []
+
+        async for item in cursor:
+            storage_summaries.append(StorageSummary(
+                storage_id=str(item["_id"]),
+                total_reservations=item["total_reservations"],
+                total_stock_items=item["total_stock_items"],
+                total_damages=item["total_damages"]
+            ))
+
+        return storage_summaries
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

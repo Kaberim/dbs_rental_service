@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
+from typing import List, Dict
 
-from fastapi import APIRouter, HTTPException, status, Body
+from fastapi import APIRouter, HTTPException, status, Body, Query
 from bson import ObjectId
 from pymongo import ReturnDocument
 from models import Reservation, UpdateReservation, ReservationCollection
@@ -68,14 +69,12 @@ async def update_reservation(id: str, reservation: UpdateReservation = Body(...)
 
     raise HTTPException(status_code=404, detail=f"Reservation {id} not found")
 
-
 @router.get(
-    "/overdue/{storage_id}",
-    response_description="List all reservations from specific storage that are overdue",
+    "/unreturned/{storage_id}",
+    response_description="List all reservations from specific storage that are unreturned",
     response_model_by_alias=False,
 )
-async def list_reservations(storage_id, days=14):
-    filter_date = (datetime.now() - timedelta(days=int(days))).isoformat()
+async def list_reservations(storage_id):
     pipeline = [
         {
             '$lookup': {
@@ -101,31 +100,24 @@ async def list_reservations(storage_id, days=14):
                         }
                     }
                 ],
-                'as': 'resource'
+                'as': 'resource_details'
             }
         },
         {
             '$unwind': {
-                'path': '$resource'
+                'path': '$resource_details'
             }
         },
         {
             '$match': {
                 '$and': [
                     {
-                        'resource.storage_id': {
+                        'resource_details.storage_id': {
                             '$eq': storage_id
                         }
                     }, {
                         'return_date': {
                             '$eq': None
-                        }
-                    },
-                    {
-                        '$expr': {
-                            '$gt': [
-                                '$booking_date', filter_date
-                            ]
                         }
                     }
                 ]
@@ -138,12 +130,12 @@ async def list_reservations(storage_id, days=14):
         },
         {
             '$facet': {
-                'overdueCount': [
+                'unreturnedCount': [
                     {
                         '$count': 'count'
                     }
                 ],
-                'overdueReservations': [
+                'unreturnedReservations': [
                     {
                         '$sort': {
                             'booking_date': 1
@@ -155,14 +147,133 @@ async def list_reservations(storage_id, days=14):
         {
             '$project': {
                 '_id': 0,
-                'overdueCount': {
+                'unreturnedCount': {
                     '$arrayElemAt': [
-                        '$overdueCount.count', 0
+                        '$unreturnedCount.count', 0
                     ]
                 },
-                'overdueReservations': 1
+                'unreturnedReservations': 1
             }
         }
     ]
 
     return await reservation_collection.aggregate(pipeline).to_list(None)
+
+@router.get(
+    "/detailed",
+    response_description="List all reservations with additional details",
+    response_model=List[Dict],
+)
+async def list_reservations_with_details():
+    pipeline = [
+        {
+            '$lookup': {
+                'from': 'stock_items',
+                'let': {
+                    'converted': {
+                        '$toObjectId': '$stock_item_id'
+                    }
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$eq': [
+                                    '$$converted', '$_id'
+                                ]
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            '_id': 0
+                        }
+                    }
+                ],
+                'as': 'stock_item_details'
+            }
+        }, {
+            '$addFields': {
+                'stock_item_details': {
+                    '$arrayElemAt': [
+                        '$stock_item_details', 0
+                    ]
+                }
+            }
+        }, {
+            '$lookup': {
+                'from': 'resources',
+                'let': {
+                    'converted': {
+                        '$toObjectId': '$stock_item_details.resource_id'
+                    }
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$eq': [
+                                    '$$converted', '$_id'
+                                ]
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            '_id': 0
+                        }
+                    }
+                ],
+                'as': 'resource_details'
+            }
+        }, {
+            '$lookup': {
+                'from': 'storages',
+                'let': {
+                    'converted': {
+                        '$toObjectId': '$stock_item_details.storage_id'
+                    }
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$eq': [
+                                    '$$converted', '$_id'
+                                ]
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            '_id': 0
+                        }
+                    }
+                ],
+                'as': 'storage_details'
+            }
+        }, {
+            '$addFields': {
+                'resource_details': {
+                    '$arrayElemAt': [
+                        '$resource_details', 0
+                    ]
+                },
+                'storage_details': {
+                    '$arrayElemAt': [
+                        '$storage_details', 0
+                    ]
+                }
+            }
+        }
+    ]
+
+    try:
+        reservations_with_details = await reservation_collection.aggregate(pipeline).to_list(length=None)
+
+        # Convert ObjectId to string
+        for reservation in reservations_with_details:
+            reservation['_id'] = str(reservation['_id'])
+            reservation['stock_item_details']['resource_id'] = str(reservation['stock_item_details']['resource_id'])
+            reservation['stock_item_details']['storage_id'] = str(reservation['stock_item_details']['storage_id'])
+
+        return reservations_with_details
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

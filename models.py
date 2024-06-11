@@ -255,3 +255,10 @@ class DamagesCollection(BaseModel):
     """
 
     damages: List[Damages]
+
+
+class StorageSummary(BaseModel):
+    storage_id: str
+    total_reservations: int
+    total_stock_items: int
+    total_damages: int

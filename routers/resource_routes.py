@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Body
+from fastapi import APIRouter, HTTPException, status, Body, Query
 from bson import ObjectId
 from pymongo import ReturnDocument
 from models import Resource, UpdateResource, ResourceCollection
@@ -9,6 +9,7 @@ client = motor.motor_asyncio.AsyncIOMotorClient(
     "mongodb+srv://user_1:dCRoIQ3N95oU2fml@rentalservice.diaace4.mongodb.net/?retryWrites=true&w=majority")
 db = client.rental_service
 resource_collection = db.get_collection("resources")
+
 
 @router.post(
     "/",
@@ -26,6 +27,7 @@ async def create_resource(resource: Resource):
     )
     return created_resource
 
+
 @router.get(
     "/",
     response_description="List all resources",
@@ -35,6 +37,7 @@ async def create_resource(resource: Resource):
 async def list_resources():
     resources = await resource_collection.find().to_list(1000)
     return ResourceCollection(resources=resources)
+
 
 @router.put(
     "/{id}",
@@ -62,3 +65,27 @@ async def update_resource(id: str, resource: UpdateResource = Body(...)):
         return existing_resource
 
     raise HTTPException(status_code=404, detail=f"Resource {id} not found")
+
+
+@router.get(
+    "/search",
+    response_description="Search resources",
+    response_model=ResourceCollection,
+    response_model_by_alias=False,
+)
+async def search_resources(query: str = Query(..., min_length=3, description="Search query string")):
+    pipeline = [
+        {
+            '$search': {
+                'index': "baseTextSearch",
+                'text': {
+                    'query': query,
+                    'path': {
+                        'wildcard': "*"
+                    }
+                }
+            }
+        }
+    ]
+    resources = await resource_collection.aggregate(pipeline).to_list(1000)
+    return ResourceCollection(resources=resources)
