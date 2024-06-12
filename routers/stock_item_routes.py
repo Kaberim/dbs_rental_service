@@ -72,11 +72,11 @@ async def update_stock_item(id: str, stock_item: UpdateStockItem = Body(...)):
 
 
 @router.get("/damaged/{id}")
-async def get_stock_items_with_damages(stock_id: str):
+async def get_stock_items_with_damages(id: str):
     pipeline = [
         {
             '$match': {
-                'storage_id': stock_id
+                'storage_id': id
             }
         },
         {
